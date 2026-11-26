@@ -27,13 +27,21 @@
 //   4. Botões ............. leitura, debounce e detecção de "combo"
 //   5. Lógica do jogo ..... inimigos, tiros, colisões, níveis
 //   6. Vídeo .............. desenha tudo na fita
-//   7. setup() e loop() ... o programa principal do Arduino
+//   7. Placar web ......... conversa entre o jogo e a página
+//   8. setup() e loop() ... o programa principal do Arduino
+//
+//  PLACAR NA WEB: o ESP32 cria a rede Wi-Fi "RGB-GAME"; no notebook, abra
+//  http://192.168.4.1. O servidor fica em web.cpp, as páginas em web/*.html,
+//  o ranking em lib/ranking e a gravação dele em ranking_store.cpp.
 //
 //  Esquema de ligação: docs/esquema.md   |   Guia de montagem: README.md
 // ============================================================================
 
 #include <Arduino.h>
 #include <FastLED.h>   // biblioteca que controla a fita de LED
+#include "ranking.h"        // Top 10 (lib/ranking)
+#include "ranking_store.h"  // grava o Top 10 na memória do ESP32
+#include "web.h"            // Wi-Fi e página do placar
 
 // ============================================================================
 // 1. CONFIGURAÇÃO  (as constantes abaixo são as que você mais vai mexer)
@@ -131,6 +139,15 @@ Note     noteQ[NOTE_QUEUE];
 uint8_t  noteLen = 0, noteIdx = 0;
 uint32_t noteEnd = 0;
 bool     noteOn = false;
+
+// Placar web e ranking (veja a seção 7)
+Ranking ranking;                          // o Top 10
+Screen  webScreen = Screen::Wait;         // tela da PÁGINA (pode diferir do estado da fita:
+                                          // o "fim de jogo" fica na página até o próximo jogador)
+char    playerName[NICK_MAX + 1] = "";    // apelido de quem está jogando ("" = anônimo)
+char    nextName[NICK_MAX + 1] = "";      // apelido enviado para a próxima partida
+int8_t  lastRank = -1;                    // posição da última partida no Top 10, ou -1
+bool    rankingNeedsSave = false;         // true = gravar na memória
 
 // ============================================================================
 // Utilitário de cor
@@ -286,6 +303,11 @@ void startGame() {
   gameStart = lastEnemyStep = lastShotStep = millis();
   spawnCountdown = 3;                         // o primeiro inimigo nasce após 3 passos
   flashPos = -1; levelFlashUntil = hurtFlashUntil = 0;
+  // O apelido enviado pela página vale só para ESTA partida.
+  strcpy(playerName, nextName);
+  nextName[0] = '\0';
+  lastRank = -1;
+  webScreen = Screen::Playing;
   sndStart();
   Serial.println("== Novo jogo ==");
   resetState(PLAYING);
@@ -309,17 +331,23 @@ void spawnEnemy() {
   }
 }
 
+// Fim de partida: coloca o resultado no ranking (se couber).
+void finishGame() {
+  Serial.printf("GAME OVER - pontos: %lu (nivel %u)\n", (unsigned long)score, level);
+  lastRank = rankingInsert(ranking, playerName, score, level);
+  if (lastRank >= 0) rankingNeedsSave = true;   // grava depois, no loop()
+  webScreen = Screen::Over;
+  sndOver();
+  resetState(GAMEOVER);
+}
+
 // Chamada quando um inimigo chega na base.
 void loseLife() {
   if (lives) lives--;
   hurtFlashUntil = millis() + 250;    // pisca as vidas em vermelho por 250 ms
   sndHurt();
   Serial.printf("Vida perdida! Restam %u\n", lives);
-  if (lives == 0) {
-    Serial.printf("GAME OVER - pontos: %lu (nivel %u)\n", (unsigned long)score, level);
-    sndOver();
-    resetState(GAMEOVER);
-  }
+  if (lives == 0) finishGame();
 }
 
 // Faz os inimigos andarem 1 pixel (quando chega a hora) e cria novos.
@@ -445,7 +473,50 @@ void renderGameOver(uint32_t now) {
 }
 
 // ============================================================================
-// 7. PROGRAMA PRINCIPAL
+// 7. PLACAR WEB
+// ============================================================================
+// O navegador só PEDE; quem decide e altera os dados é sempre o jogo, aqui.
+
+// Atende os pedidos que chegaram pela página.
+void handleWebCommands() {
+  WebCommand c;
+  while (webPollCommand(c)) {
+    // Durante a partida nada muda. O servidor já recusa, mas o pedido pode ter
+    // entrado na fila um instante antes de a partida começar.
+    if (state == PLAYING) continue;
+
+    switch (c.type) {
+      case WebCommand::SetName:
+        sanitizeName(c.name, nextName);
+        if (webScreen == Screen::Over) webScreen = Screen::Wait;
+        break;
+      case WebCommand::Delete:
+        if (rankingRemove(ranking, c.id)) { rankingNeedsSave = true; lastRank = -1; }
+        break;
+      case WebCommand::Reset:
+        rankingClear(ranking);
+        rankingNeedsSave = true;
+        lastRank = -1;
+        break;
+    }
+  }
+}
+
+// Entrega à parte web uma "foto" do jogo. Ela só envia quando algo muda.
+void publishToWeb() {
+  GameSnapshot s{};
+  s.screen = webScreen;
+  strcpy(s.player, playerName);
+  strcpy(s.nextPlayer, nextName);
+  s.score = score;
+  s.level = level;
+  s.lives = lives;
+  s.lastRank = lastRank;
+  webPublish(s, ranking);
+}
+
+// ============================================================================
+// 8. PROGRAMA PRINCIPAL
 // ============================================================================
 
 // setup() roda UMA vez quando o ESP32 liga.
@@ -456,6 +527,8 @@ void setup() {
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS);
   FastLED.setBrightness(BRIGHTNESS);
   randomSeed(esp_random());                   // para os inimigos não saírem sempre iguais
+  storeLoad(ranking);                         // recupera o Top 10 salvo
+  if (!webBegin()) Serial.println("Sem placar web; o jogo funciona normalmente.");
   Serial.println("RGB GAME pronto. Aperte qualquer botao para jogar.");
   resetState(ATTRACT);
 }
@@ -468,6 +541,9 @@ void loop() {
   soundUpdate();                  // mantém a melodia andando
 
   uint8_t fire = pollFire();      // 0 = nenhum disparo; senão, a máscara de cor do tiro
+
+  // Antes da lógica: assim um apelido recém-enviado vale para a partida que começar agora.
+  handleWebCommands();
 
   // Lógica de cada estado
   switch (state) {
@@ -496,5 +572,14 @@ void loop() {
       case GAMEOVER: renderGameOver(now); break;
     }
     FastLED.show();
+
+    // Gravar na memória demora alguns milissegundos, por isso só quando o
+    // ranking muda (fim de partida ou organizador), nunca durante o jogo.
+    if (rankingNeedsSave && state != PLAYING) {
+      rankingNeedsSave = false;
+      if (!storeSave(ranking)) Serial.println("ERRO: nao foi possivel salvar o ranking");
+    }
   }
+
+  publishToWeb();
 }

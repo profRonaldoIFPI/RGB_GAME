@@ -31,7 +31,7 @@ Luzes coloridas "descem" pela fita em direção ao jogador. Com os botões, o jo
 
 ## Materiais
 
-Veja a lista completa em [docs/esquema.md](docs/esquema.md#lista-de-materiais). Resumo: ESP32 DOIT DevKit V1, fita WS2811 12 V (até 1 m), fonte 12 V ≥ 2 A, buck 12→5 V, 74HCT125, 3 botões, buzzer **passivo**, resistores (330 Ω e 100 Ω) e um capacitor de 1000 µF.
+Veja a lista completa em [docs/esquema.md](docs/esquema.md#lista-de-materiais). Resumo: ESP32 DOIT DevKit V1, fita WS2811 12 V (até 1 m), fonte 12 V ≥ 2 A, regulador 7805 com dissipador, 74HCT125, 3 botões, buzzer **passivo**, resistores (330 Ω e 100 Ω) e capacitores (1000 µF para a fita e os do 7805).
 
 ## Passo a passo
 
@@ -47,8 +47,10 @@ Siga o diagrama de [docs/esquema.md](docs/esquema.md). Pinos usados no ESP32:
 | Buzzer | 18 |
 
 Cuidados importantes:
-- **Todos os GND juntos** (fonte, buck, ESP32, 74HCT125 e fita).
+- **Todos os GND juntos** (fonte, 7805, ESP32, 74HCT125 e fita).
+- A fita liga **direto nos 12 V** da fonte. O 7805 reduz para 5 V só para o ESP32 e o 74HCT125. Coloque os capacitores junto dele, use um dissipador e **confira os 5 V na saída antes de ligar o ESP32**.
 - O 74HCT125 converte o sinal de 3,3 V do ESP32 para 5 V, que é o que a fita precisa para entender os dados.
+- ⚠️ **Não substitua o 74HCT125 por plaquinhas de "conversor de nível lógico" com BSS138 ou TXS0108E.** Elas costumam deformar o sinal da fita (cores erradas ou LEDs piscando). Veja o [aviso no esquema](docs/esquema.md#2-dados-da-fita-conversor-de-nível-74hct125).
 - O **capacitor de 1000 µF** vai na alimentação da fita e o **resistor de 330 Ω** vai em série no fio de dados.
 - Não ligue o USB e a alimentação por VIN ao mesmo tempo. Para gravar o programa, desligue a fonte de 12 V.
 - Teste os botões e o buzzer **antes** de ligar a fita.
@@ -74,9 +76,10 @@ Abra [src/main.cpp](src/main.cpp) e olhe a seção **1. CONFIGURAÇÃO**:
 
 | Problema | O que verificar |
 |----------|-----------------|
-| A fita não acende | GND comum, fio de dados no 74HCT125, alimentação de 12 V da fita, pino 1 (1OE) do 74HCT125 no GND |
+| A fita não acende | GND comum, fio de dados no 74HCT125, alimentação de 12 V da fita, pino 1 (1OE) do 74HCT125 no GND, 5 V na saída do 7805 |
 | Cores trocadas | `COLOR_ORDER` no `main.cpp` |
-| LEDs aleatórios ou piscando | Falta GND comum, capacitor ou resistor de 330 Ω; fio de dados muito longo |
+| 7805 muito quente | Dissipador instalado? Meça a corrente em 5 V e procure curto-circuito |
+| LEDs aleatórios ou piscando | Falta GND comum, capacitor ou resistor de 330 Ω; fio de dados muito longo, ou conversor de nível inadequado (BSS138/TXS0108E) |
 | Só 1 LED acende (ou só alguns) | `NUM_LEDS` errado |
 | O buzzer faz só "toc" | O buzzer é ativo; troque por um passivo |
 | Botão não responde | Um lado no GPIO e o outro no GND, nada de resistor externo |

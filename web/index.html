@@ -1,1 +1,185 @@
-<!doctype html><title>RGB GAME</title>
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>RGB GAME</title>
+<!--
+  Página do ranking. Sem internet: tudo (estilo e programa) está neste arquivo.
+  Ela é embutida no firmware por scripts/embed_web.py a cada build.
+
+  Como funciona: o ESP32 "empurra" dados por /events (Server-Sent Events):
+    evento "state"   -> em que tela estamos, pontos, vidas...
+    evento "ranking" -> o Top 10
+  e a página só desenha o que recebeu.
+-->
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #07070f; color: #f4f4ff; min-height: 100vh;
+    font-family: "Courier New", monospace; font-weight: bold;
+    text-align: center; padding: 1vh 3vw;
+  }
+  [hidden] { display: none !important; }
+  h1 { font-size: clamp(1.4rem, min(7vw, 7vh), 5rem); letter-spacing: .1em; }
+  h1 .r { color: #ff3b3b; } h1 .g { color: #33ff66; } h1 .b { color: #4d8dff; }
+  h2 { font-size: clamp(1.3rem, min(5vw, 5vh), 3.5rem); color: #ff3b3b; }
+  .big { font-size: clamp(5rem, 22vw, 15rem); color: #ffe94d; line-height: 1.1; }
+  .mid { font-size: clamp(1.1rem, min(3.5vw, 3.6vh), 2.5rem); margin: .4vh 0; }
+  #msg:empty { display: none; }
+  .lives { color: #33ff66; }
+  .blink { animation: blink 1.2s steps(2, start) infinite; }
+  @keyframes blink { to { visibility: hidden; } }
+  form { margin: .6vh 0; }
+  input, button {
+    font: inherit; font-size: clamp(1rem, min(2.8vw, 3vh), 2rem); padding: .15em .6em;
+    border: 3px solid #4d8dff; border-radius: 6px; background: #111127; color: inherit;
+  }
+  input { width: 14ch; text-transform: uppercase; text-align: center; }
+  button { cursor: pointer; background: #4d8dff; color: #07070f; }
+  small { display: block; color: #9a9ac0; margin-top: .3vh; font-size: .9rem; }
+  table { margin: .6vh auto; border-collapse: collapse; width: min(100%, 52rem);
+          font-size: clamp(.9rem, min(2.6vw, 3vh), 1.9rem); line-height: 1.15; }
+  th { color: #4d8dff; } th, td { padding: .02em .6em; }
+  td:nth-child(2) { text-align: left; white-space: pre; }
+  td:nth-child(3) { text-align: right; }
+  tr:first-child td { color: #ffe94d; }
+  tr.new td { background: #33ff66; color: #07070f; }
+  #offline { position: fixed; top: 0; left: 0; right: 0; background: #ff3b3b;
+             color: #fff; padding: .4em; font-size: 1.3rem; }
+</style>
+</head>
+<body>
+<div id="offline">Sem conexão com o jogo. Confira se o notebook está na rede do ESP32.</div>
+
+<h1>★ <span class="r">R</span><span class="g">G</span><span class="b">B</span> GAME ★</h1>
+
+<!-- Tela "Jogando" -->
+<section id="playing" hidden>
+  <p class="mid">JOGADOR: <span id="player"></span></p>
+  <p class="mid">PONTOS</p>
+  <p class="big" id="score">0</p>
+  <p class="mid">NÍVEL <span id="level">1</span> &nbsp; VIDAS <span class="lives" id="lives"></span></p>
+  <p class="mid">Recorde: <span id="record">0</span></p>
+</section>
+
+<!-- Telas "Espera" e "Fim" -->
+<section id="lobby">
+  <div id="over" hidden>
+    <h2>GAME OVER</h2>
+    <p class="mid"><span id="overPlayer"></span> · <span id="overScore"></span> pontos</p>
+    <p class="mid" id="overRank"></p>
+  </div>
+
+  <form id="form" autocomplete="off">
+    <label for="name" class="mid">Apelido:</label>
+    <input id="name" maxlength="10" placeholder="opcional">
+    <button type="submit">OK</button>
+    <small>Não use seu nome completo. Até 10 letras ou números.</small>
+  </form>
+  <p class="mid" id="next" hidden>Próximo jogador: <span id="nextName"></span></p>
+  <p class="mid" id="msg" role="status"></p>
+  <p class="mid blink">Aperte um botão para jogar</p>
+
+  <table>
+    <thead><tr><th>#</th><th>NOME</th><th>PONTOS</th><th>NÍVEL</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</section>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const LIVES_MAX = 3;
+let state = null;      // último evento "state"
+let ranking = [];      // último evento "ranking"
+let lastMessage = 0;   // quando chegou o último "state"
+
+const show = (name) => name || "---";           // anônimo
+const text = (id, value) => { $(id).textContent = value; };  // nunca usa innerHTML
+
+function renderRanking() {
+  const rows = [];
+  for (let i = 0; i < 10; i++) {
+    const e = ranking[i];
+    const tr = document.createElement("tr");
+    const cells = e ? [i + 1, show(e.name), e.score, e.level + 1] : [i + 1, "---", "-", "-"];
+    for (const value of cells) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      tr.appendChild(td);
+    }
+    if (state && state.screen === "over" && state.lastRank === i) tr.className = "new";
+    rows.push(tr);
+  }
+  $("rows").replaceChildren(...rows);
+}
+
+function renderState() {
+  const playing = state.screen === "playing";
+  $("playing").hidden = !playing;
+  $("lobby").hidden = playing;
+  $("over").hidden = state.screen !== "over";
+  $("next").hidden = !state.next;
+  text("nextName", state.next);
+
+  const record = Math.max(ranking.length ? ranking[0].score : 0, state.score);
+  text("player", show(state.player));
+  text("score", state.score);
+  text("level", state.level + 1);
+  text("lives", "♥".repeat(state.lives) + "♡".repeat(Math.max(0, LIVES_MAX - state.lives)));
+  text("record", record);
+
+  text("overPlayer", show(state.player));
+  text("overScore", state.score);
+  text("overRank", state.lastRank >= 0
+    ? "Você ficou em " + (state.lastRank + 1) + "º lugar!"
+    : "Pontuação fora do Top 10");
+}
+
+// ---------------------------------------------------------- Conexão ------
+// O EventSource reconecta sozinho se a conexão cair.
+const source = new EventSource("/events");
+
+source.addEventListener("ranking", (ev) => {
+  ranking = JSON.parse(ev.data);
+  renderRanking();
+});
+
+source.addEventListener("state", (ev) => {
+  const before = state;
+  state = JSON.parse(ev.data);
+  lastMessage = Date.now();
+  $("offline").hidden = true;
+  renderState();
+  // A tabela só é redesenhada quando o destaque pode ter mudado.
+  if (!before || before.screen !== state.screen || before.lastRank !== state.lastRank) {
+    renderRanking();
+    if (state.screen === "playing") { $("name").value = ""; text("msg", ""); }
+  }
+});
+
+source.onerror = () => { $("offline").hidden = false; };
+// O ESP32 manda um sinal a cada 2 s; 5 s de silêncio = conexão perdida.
+setInterval(() => { if (Date.now() - lastMessage > 5000) $("offline").hidden = false; }, 1000);
+
+// ---------------------------------------------------------- Apelido ------
+$("form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  // Separa os acentos das letras e os remove: "João" -> "Joao"
+  const name = $("name").value.normalize("NFD").replace(/[̀-ͯ]/g, "");
+  try {
+    const res = await fetch("/name", { method: "POST", body: new URLSearchParams({ name }) });
+    if (res.ok) { $("name").value = ""; $("name").blur(); text("msg", ""); }
+    else if (res.status === 409) text("msg", "Espere a partida terminar.");
+    else text("msg", "Não deu certo. Tente de novo.");
+  } catch (e) {
+    text("msg", "Sem conexão. Tente de novo.");
+  }
+});
+
+renderRanking();
+</script>
+</body>
+</html>

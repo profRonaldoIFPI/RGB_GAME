@@ -1,1 +1,85 @@
-<!doctype html><title>RGB GAME - admin</title>
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>RGB GAME - Organizador</title>
+<!-- Página do organizador: apagar apelidos impróprios ou zerar o ranking. -->
+<style>
+  body { background: #07070f; color: #f4f4ff; font-family: system-ui, sans-serif;
+         max-width: 40rem; margin: 0 auto; padding: 1rem; }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+  th, td { text-align: left; padding: .4rem; border-bottom: 1px solid #333355; }
+  td:nth-child(2) { white-space: pre; }
+  input, button { font: inherit; padding: .4rem .7rem; border-radius: 5px;
+                  border: 1px solid #4d8dff; background: #111127; color: inherit; }
+  button { cursor: pointer; }
+  .danger { border-color: #ff3b3b; background: #5a1010; }
+  #msg { min-height: 1.5em; color: #ffe94d; }
+</style>
+</head>
+<body>
+<h1>Organizador</h1>
+<p><label>PIN: <input id="pin" type="password" inputmode="numeric" autocomplete="off"></label></p>
+<p id="msg" role="status">Conectando...</p>
+<table>
+  <thead><tr><th>#</th><th>Nome</th><th>Pontos</th><th></th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+<p><button id="reset" class="danger">Zerar ranking</button></p>
+<p><a href="/" style="color:#4d8dff">Voltar ao placar</a></p>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const say = (m) => { $("msg").textContent = m; };
+
+async function send(url, fields) {
+  const body = new URLSearchParams({ pin: $("pin").value, ...fields });
+  try {
+    const res = await fetch(url, { method: "POST", body });
+    if (res.ok) say("Feito.");
+    else if (res.status === 403) say("PIN errado.");
+    else if (res.status === 409) say("Há uma partida em andamento. Espere terminar.");
+    else if (res.status === 400) say("Preencha o PIN.");
+    else say("Não deu certo. Tente de novo.");
+  } catch (e) {
+    say("Sem conexão com o jogo.");
+  }
+}
+
+function cell(tr, value) {
+  const td = document.createElement("td");
+  td.textContent = value;      // nunca innerHTML
+  tr.appendChild(td);
+  return td;
+}
+
+const source = new EventSource("/events");
+source.onopen = () => say("");
+source.onerror = () => say("Sem conexão com o jogo.");
+source.addEventListener("ranking", (ev) => {
+  const rows = JSON.parse(ev.data).map((e, i) => {
+    const tr = document.createElement("tr");
+    const name = e.name || "---";
+    cell(tr, i + 1); cell(tr, name); cell(tr, e.score);
+    const button = document.createElement("button");
+    button.textContent = "Apagar";
+    // Apaga pelo id, não pela posição, para nunca apagar a linha errada.
+    button.onclick = () => {
+      if (confirm("Apagar " + name + " (" + e.score + " pontos)?"))
+        send("/admin/delete", { id: e.id });
+    };
+    cell(tr, "").appendChild(button);
+    return tr;
+  });
+  $("rows").replaceChildren(...rows);
+});
+
+$("reset").onclick = () => {
+  if (confirm("Apagar TODO o ranking? Não dá para desfazer.")) send("/admin/reset", {});
+};
+</script>
+</body>
+</html>

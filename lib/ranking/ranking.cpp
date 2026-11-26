@@ -29,6 +29,12 @@ int rankingInsert(Ranking& r, const char* name, uint32_t score, uint8_t level) {
   return pos;
 }
 
+int rankingPositionOf(const Ranking& r, uint32_t id) {
+  for (uint8_t i = 0; i < r.count; i++)
+    if (r.entries[i].id == id) return i;
+  return -1;
+}
+
 bool rankingRemove(Ranking& r, uint32_t id) {
   for (uint8_t i = 0; i < r.count; i++) {
     if (r.entries[i].id != id) continue;

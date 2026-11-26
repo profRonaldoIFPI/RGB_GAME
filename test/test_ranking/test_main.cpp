@@ -93,6 +93,21 @@ void valida_dados() {
   TEST_ASSERT_FALSE(rankingIsValid(ruim));
 }
 
+void posicao_acompanha_a_linha() {
+  Ranking r{};
+  rankingInsert(r, "A", 300, 0);
+  rankingInsert(r, "B", 200, 0);
+  rankingInsert(r, "C", 100, 0);
+  uint32_t b = r.entries[1].id;
+  rankingRemove(r, r.entries[2].id);     // apagar quem está abaixo não muda a posição
+  TEST_ASSERT_EQUAL(1, rankingPositionOf(r, b));
+  rankingRemove(r, r.entries[0].id);     // apagar quem está acima faz subir
+  TEST_ASSERT_EQUAL(0, rankingPositionOf(r, b));
+  rankingRemove(r, b);                   // apagada a própria linha
+  TEST_ASSERT_EQUAL(-1, rankingPositionOf(r, b));
+  TEST_ASSERT_EQUAL(-1, rankingPositionOf(r, 0));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(insere_em_ordem);
@@ -103,5 +118,6 @@ int main() {
   RUN_TEST(ids_nao_se_repetem);
   RUN_TEST(limpa_apelido);
   RUN_TEST(valida_dados);
+  RUN_TEST(posicao_acompanha_a_linha);
   return UNITY_END();
 }

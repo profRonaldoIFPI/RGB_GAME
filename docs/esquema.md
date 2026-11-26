@@ -76,7 +76,7 @@ Confira a pinagem no datasheet do CI que você comprou. O 74AHCT125 também serv
 >
 > | Módulo | Serve? |
 > |--------|--------|
-> | **74HCT125**, 74AHCT125 ou 74HCT245 (CI) | ✅ Recomendado |
+> | **74HCT125** ou 74AHCT125 (CI) | ✅ Recomendado |
 > | Plaquinha de 4 canais com transistores **BSS138** (a mais comum, feita para I2C) | ❌ Evite. Depende de resistores de pull-up (geralmente 10 kΩ); o sinal sobe devagar e os pulsos da fita se deformam |
 > | Módulo com **TXS0108E** | ❌ Evite. Saída fraca e detecção automática de direção, que costuma falhar com fitas de LED |
 >

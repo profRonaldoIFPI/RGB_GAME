@@ -130,7 +130,7 @@ Contrato HTTP/SSE:
   - `setup`: `storeLoad`, depois `webBegin` (falha só vai para a serial).
   - `startGame`: `playerName = nextName`, limpar `nextName`, `webScreen = Playing`, `lastRank = -1`.
   - Fim de jogo (em `loseLife`): `lastRank = rankingInsert(...)`; `webScreen = Over`; se `lastRank >= 0`, marcar para salvar. O `storeSave` roda no `loop`, depois do `FastLED.show()`, uma vez.
-  - `loop`: consumir `webPollCommand`. Com `state == PLAYING`, descartar todo comando. `SetName`: `sanitizeName` em `nextName`; `Over` vira `Wait`. `Delete`: se remover, salvar e `lastRank = -1`. `Reset`: `rankingClear`, salvar, `lastRank = -1`. Em seguida, `webPublish`.
+  - `loop`: consumir `webPollCommand`. Com `state == PLAYING`, descartar todo comando. `SetName`: `sanitizeName` em `nextName`; `Over` vira `Wait`. `Delete`: se remover, salvar e recalcular `lastRank` pela linha do jogador (`rankingPositionOf`). `Reset`: `rankingClear`, salvar, `lastRank = -1`. Em seguida, `webPublish`.
   - `webScreen` é independente do estado da fita: continua `Over` quando a fita volta ao arco-íris.
 - [ ] **Step 2:** `pio run` → SUCCESS; `pio test -e native` → PASS.
 - [ ] **Step 3:** Commit `feat: integra ranking web ao jogo`.

@@ -147,6 +147,7 @@ Screen  webScreen = Screen::Wait;         // tela da PÁGINA (pode diferir do es
 char    playerName[NICK_MAX + 1] = "";    // apelido de quem está jogando ("" = anônimo)
 char    nextName[NICK_MAX + 1] = "";      // apelido enviado para a próxima partida
 int8_t  lastRank = -1;                    // posição da última partida no Top 10, ou -1
+uint32_t lastId = 0;                      // id da linha dessa partida (0 = não entrou)
 bool    rankingNeedsSave = false;         // true = gravar na memória
 
 // ============================================================================
@@ -307,6 +308,7 @@ void startGame() {
   strcpy(playerName, nextName);
   nextName[0] = '\0';
   lastRank = -1;
+  lastId = 0;
   webScreen = Screen::Playing;
   sndStart();
   Serial.println("== Novo jogo ==");
@@ -335,7 +337,11 @@ void spawnEnemy() {
 void finishGame() {
   Serial.printf("GAME OVER - pontos: %lu (nivel %u)\n", (unsigned long)score, level);
   lastRank = rankingInsert(ranking, playerName, score, level);
-  if (lastRank >= 0) rankingNeedsSave = true;   // grava depois, no loop()
+  lastId = 0;
+  if (lastRank >= 0) {
+    lastId = ranking.entries[lastRank].id;
+    rankingNeedsSave = true;                    // grava depois, no loop()
+  }
   webScreen = Screen::Over;
   sndOver();
   resetState(GAMEOVER);
@@ -491,7 +497,10 @@ void handleWebCommands() {
         if (webScreen == Screen::Over) webScreen = Screen::Wait;
         break;
       case WebCommand::Delete:
-        if (rankingRemove(ranking, c.id)) { rankingNeedsSave = true; lastRank = -1; }
+        if (rankingRemove(ranking, c.id)) {
+          rankingNeedsSave = true;
+          lastRank = rankingPositionOf(ranking, lastId);  // a linha do jogador pode ter subido
+        }
         break;
       case WebCommand::Reset:
         rankingClear(ranking);

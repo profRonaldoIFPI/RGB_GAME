@@ -25,6 +25,8 @@ void rankingClear(Ranking& r);
 int rankingInsert(Ranking& r, const char* name, uint32_t score, uint8_t level);
 // Apaga a linha com este id. Retorna false se ela não existe.
 bool rankingRemove(Ranking& r, uint32_t id);
+// Posição atual (0 a 9) da linha com este id, ou -1 se ela não está no ranking.
+int rankingPositionOf(const Ranking& r, uint32_t id);
 // Confere se os dados fazem sentido (usado ao ler a memória do ESP32).
 bool rankingIsValid(const Ranking& r);
 // Limpa um apelido: maiúsculas, só A-Z, 0-9 e espaço, no máximo NICK_MAX.

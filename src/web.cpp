@@ -5,6 +5,9 @@
 //   POST /name           apelido do próximo jogador (campo: name)
 //   POST /admin/delete   apaga uma linha          (campos: pin, id)
 //   POST /admin/reset    zera o ranking           (campo: pin)
+//
+// Um POST aceito responde com o NÚMERO DO PEDIDO. Aceito não quer dizer feito:
+// o resultado aparece depois no evento "state", nos campos "done" e "refused".
 #include "web.h"
 #include <Arduino.h>
 #include <WiFi.h>
@@ -29,12 +32,14 @@ static bool running = false;
 // "escape" para entrar no JSON.
 static String stateJson(const GameSnapshot& s) {
   static const char* const SCREEN[] = {"wait", "playing", "over"};
-  char buf[200];
+  char buf[300];
   snprintf(buf, sizeof(buf),
            "{\"screen\":\"%s\",\"player\":\"%s\",\"next\":\"%s\",\"score\":%lu,"
-           "\"level\":%u,\"lives\":%u,\"lastRank\":%d}",
+           "\"level\":%u,\"lives\":%u,\"lastRank\":%d,\"livesMax\":%u,"
+           "\"done\":%lu,\"refused\":%lu}",
            SCREEN[(uint8_t)s.screen], s.player, s.nextPlayer, (unsigned long)s.score,
-           s.level, s.lives, s.lastRank);
+           s.level, s.lives, s.lastRank, s.livesMax,
+           (unsigned long)s.done, (unsigned long)s.refused);
   return String(buf);
 }
 
@@ -66,10 +71,13 @@ static bool field(AsyncWebServerRequest* req, const char* name, String& out) {
 }
 
 // Coloca o pedido na fila e responde ao navegador.
-static void enqueue(AsyncWebServerRequest* req, const WebCommand& c) {
+static void enqueue(AsyncWebServerRequest* req, WebCommand& c) {
+  static uint32_t lastTicket = 0;   // só a tarefa de rede usa
   if (isPlaying()) { req->send(409, "text/plain", "jogo em andamento"); return; }
+  c.ticket = lastTicket + 1;
   if (xQueueSend(commandQueue, &c, 0) != pdTRUE) { req->send(503, "text/plain", "ocupado"); return; }
-  req->send(200, "text/plain", "ok");
+  lastTicket = c.ticket;
+  req->send(200, "text/plain", String(c.ticket));
 }
 
 static void handleName(AsyncWebServerRequest* req) {
@@ -115,6 +123,12 @@ static void handleConnect(AsyncEventSourceClient* client) {
   client->send(stateJson(s).c_str(), "state", 0, 1000);   // 1000 ms = tempo p/ reconectar
 }
 
+// Envia uma página DIRETO da flash. Passar o tamanho e o tipo uint8_t* faz a
+// biblioteca ler aos pedaços, sem copiar a página inteira para a memória RAM.
+static void sendPage(AsyncWebServerRequest* req, const char* page, size_t len) {
+  req->send(200, "text/html; charset=utf-8", reinterpret_cast<const uint8_t*>(page), len);
+}
+
 // -------------------------------------------------- Chamadas pelo jogo -----
 bool webBegin() {
   commandQueue = xQueueCreate(8, sizeof(WebCommand));
@@ -128,10 +142,10 @@ bool webBegin() {
   }
 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* req) {
-    req->send(200, "text/html; charset=utf-8", PAGE_INDEX);
+    sendPage(req, PAGE_INDEX, sizeof(PAGE_INDEX) - 1);
   });
   server.on("/admin", HTTP_GET, [](AsyncWebServerRequest* req) {
-    req->send(200, "text/html; charset=utf-8", PAGE_ADMIN);
+    sendPage(req, PAGE_ADMIN, sizeof(PAGE_ADMIN) - 1);
   });
   server.on("/name", HTTP_POST, handleName);
   server.on("/admin/delete", HTTP_POST, handleDelete);
@@ -150,6 +164,7 @@ bool webBegin() {
 static bool sameState(const GameSnapshot& a, const GameSnapshot& b) {
   return a.screen == b.screen && a.score == b.score && a.level == b.level &&
          a.lives == b.lives && a.lastRank == b.lastRank &&
+         a.livesMax == b.livesMax && a.done == b.done && a.refused == b.refused &&
          strcmp(a.player, b.player) == 0 && strcmp(a.nextPlayer, b.nextPlayer) == 0;
 }
 
@@ -165,6 +180,9 @@ void webPublish(const GameSnapshot& s, const Ranking& r) {
     xSemaphoreGive(dataMutex);
     stateDirty = true;
   }
+  // Aqui o memcmp serve, apesar dos bytes de enchimento: a cópia é feita com
+  // memcpy, que copia TODOS os bytes (inclusive esses). Se o ranking não mudou,
+  // os dois blocos de memória continuam idênticos.
   if (memcmp(&r, &sharedRanking, sizeof(Ranking)) != 0) {
     xSemaphoreTake(dataMutex, portMAX_DELAY);
     memcpy(&sharedRanking, &r, sizeof(Ranking));

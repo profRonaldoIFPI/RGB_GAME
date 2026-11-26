@@ -20,6 +20,9 @@ struct GameSnapshot {
   uint32_t score;
   uint8_t level, lives;
   int8_t lastRank;                // posição da última partida no Top 10 (0 a 9) ou -1
+  uint8_t livesMax;               // vidas no início (vem de LIVES_MAX no main.cpp)
+  uint32_t done;                  // número do último pedido que o jogo tratou
+  uint32_t refused;               // número do último pedido que o jogo recusou
 };
 
 // Pedido feito pelo navegador
@@ -27,6 +30,7 @@ struct WebCommand {
   enum Type : uint8_t { SetName, Delete, Reset } type;
   char name[NICK_MAX + 1];   // usado em SetName (já limpo)
   uint32_t id;               // usado em Delete
+  uint32_t ticket;           // número do pedido: o navegador usa para saber o resultado
 };
 
 bool webBegin();                    // liga o Wi-Fi e o servidor; false se falhar

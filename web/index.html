@@ -55,6 +55,9 @@
 
 <h1>★ <span class="r">R</span><span class="g">G</span><span class="b">B</span> GAME ★</h1>
 
+<!-- Avisos: ficam fora das telas para aparecerem mesmo durante a partida -->
+<p class="mid" id="msg" role="status"></p>
+
 <!-- Tela "Jogando" -->
 <section id="playing" hidden>
   <p class="mid">JOGADOR: <span id="player"></span></p>
@@ -79,7 +82,6 @@
     <small>Não use seu nome completo. Até 10 letras ou números.</small>
   </form>
   <p class="mid" id="next" hidden>Próximo jogador: <span id="nextName"></span></p>
-  <p class="mid" id="msg" role="status"></p>
   <p class="mid blink">Aperte um botão para jogar</p>
 
   <table>
@@ -91,7 +93,6 @@
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-const LIVES_MAX = 3;
 let state = null;      // último evento "state"
 let ranking = [];      // último evento "ranking"
 let lastMessage = 0;   // quando chegou o último "state"
@@ -128,7 +129,8 @@ function renderState() {
   text("player", show(state.player));
   text("score", state.score);
   text("level", state.level + 1);
-  text("lives", "♥".repeat(state.lives) + "♡".repeat(Math.max(0, LIVES_MAX - state.lives)));
+  // livesMax vem do firmware (LIVES_MAX no main.cpp).
+  text("lives", "♥".repeat(state.lives) + "♡".repeat(Math.max(0, state.livesMax - state.lives)));
   text("record", record);
 
   text("overPlayer", show(state.player));
@@ -139,15 +141,42 @@ function renderState() {
 }
 
 // ---------------------------------------------------------- Conexão ------
-// O EventSource reconecta sozinho se a conexão cair.
-const source = new EventSource("/events");
+// O EventSource reconecta sozinho quando a conexão cai. Mas, se o servidor
+// responder com erro, o navegador DESISTE (CLOSED); aí criamos outra conexão.
+let pending = null;    // pedido enviado, esperando o jogo dizer se fez
 
-source.addEventListener("ranking", (ev) => {
+// Confere se o estado recebido já traz o resultado do pedido que esperamos.
+function checkPending() {
+  if (!pending || !state || state.done < pending.ticket) return;
+  pending.finish(state.refused === pending.ticket ? "refused" : "ok");
+}
+
+// Espera o jogo tratar o pedido: "ok", "refused" ou "timeout".
+function confirmation(ticket) {
+  return new Promise((resolve) => {
+    const finish = (result) => { clearTimeout(timer); pending = null; resolve(result); };
+    const timer = setTimeout(() => finish("timeout"), 3000);
+    pending = { ticket, finish };
+    checkPending();    // o "state" pode ter chegado antes da resposta do POST
+  });
+}
+
+function connect() {
+  const source = new EventSource("/events");
+  source.addEventListener("ranking", onRanking);
+  source.addEventListener("state", onState);
+  source.onerror = () => {
+    $("offline").hidden = false;
+    if (source.readyState === EventSource.CLOSED) setTimeout(connect, 2000);
+  };
+}
+
+function onRanking(ev) {
   ranking = JSON.parse(ev.data);
   renderRanking();
-});
+}
 
-source.addEventListener("state", (ev) => {
+function onState(ev) {
   const before = state;
   state = JSON.parse(ev.data);
   lastMessage = Date.now();
@@ -158,9 +187,9 @@ source.addEventListener("state", (ev) => {
     renderRanking();
     if (state.screen === "playing") { $("name").value = ""; text("msg", ""); }
   }
-});
+  checkPending();   // depois de limpar a tela, para o aviso não ser apagado
+}
 
-source.onerror = () => { $("offline").hidden = false; };
 // O ESP32 manda um sinal a cada 2 s; 5 s de silêncio = conexão perdida.
 setInterval(() => { if (Date.now() - lastMessage > 5000) $("offline").hidden = false; }, 1000);
 
@@ -168,11 +197,18 @@ setInterval(() => { if (Date.now() - lastMessage > 5000) $("offline").hidden = f
 $("form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   // Separa os acentos das letras e os remove: "João" -> "Joao"
-  const name = $("name").value.normalize("NFD").replace(/[̀-ͯ]/g, "");
+  const name = $("name").value.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   try {
     const res = await fetch("/name", { method: "POST", body: new URLSearchParams({ name }) });
-    if (res.ok) { $("name").value = ""; $("name").blur(); text("msg", ""); }
-    else if (res.status === 409) text("msg", "Espere a partida terminar.");
+    if (res.ok) {
+      const result = await confirmation(Number(await res.text()));
+      if (result === "ok") { $("name").value = ""; $("name").blur(); text("msg", ""); }
+      else if (result === "refused") {
+        $("name").value = name.toUpperCase();   // fica no campo para reenviar
+        text("msg", "A partida começou antes: " + name.toUpperCase() +
+             " não foi registrado. Envie de novo quando ela terminar.");
+      } else text("msg", "Não deu certo. Tente de novo.");
+    } else if (res.status === 409) text("msg", "Espere a partida terminar.");
     else text("msg", "Não deu certo. Tente de novo.");
   } catch (e) {
     text("msg", "Sem conexão. Tente de novo.");
@@ -180,6 +216,7 @@ $("form").addEventListener("submit", async (ev) => {
 });
 
 renderRanking();
+connect();
 </script>
 </body>
 </html>

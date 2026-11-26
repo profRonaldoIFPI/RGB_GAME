@@ -81,6 +81,7 @@ A fita piscasse errado ou os botões engasgassem por causa do Wi-Fi; o ranking s
 
 **Eventos SSE:**
 - `state`: tela, apelido atual, próximo apelido, pontos, nível, vidas, resultado da última partida. Enviado quando muda (no máximo a cada 100 ms) e a cada 2 s como sinal de vida.
+- `state` também leva `livesMax` (do `main.cpp`), `done` e `refused`: um POST aceito devolve o número do pedido, e a página só confirma quando o jogo o trata.
 - `ranking`: lista completa, cada linha com um identificador. Enviado ao conectar e quando muda.
 
 Apagar usa o identificador, não a posição, para não remover a linha errada.

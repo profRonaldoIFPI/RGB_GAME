@@ -40,6 +40,7 @@
 #include <Arduino.h>
 #include <FastLED.h>   // biblioteca que controla a fita de LED
 #include "ranking.h"        // Top 10 (lib/ranking)
+#include "pending_save.h"   // quando gravar (e tentar de novo se falhar)
 #include "ranking_store.h"  // grava o Top 10 na memória do ESP32
 #include "web.h"            // Wi-Fi e página do placar
 
@@ -148,7 +149,9 @@ char    playerName[NICK_MAX + 1] = "";    // apelido de quem está jogando ("" =
 char    nextName[NICK_MAX + 1] = "";      // apelido enviado para a próxima partida
 int8_t  lastRank = -1;                    // posição da última partida no Top 10, ou -1
 uint32_t lastId = 0;                      // id da linha dessa partida (0 = não entrou)
-bool    rankingNeedsSave = false;         // true = gravar na memória
+PendingSave rankingSave;                  // há mudanças para gravar na memória?
+uint32_t commandDone = 0;                 // último pedido da página já tratado
+uint32_t commandRefused = 0;              // último pedido da página recusado
 
 // ============================================================================
 // Utilitário de cor
@@ -340,7 +343,7 @@ void finishGame() {
   lastId = 0;
   if (lastRank >= 0) {
     lastId = ranking.entries[lastRank].id;
-    rankingNeedsSave = true;                    // grava depois, no loop()
+    saveRequest(rankingSave);                   // grava depois, no loop()
   }
   webScreen = Screen::Over;
   sndOver();
@@ -487,9 +490,11 @@ void renderGameOver(uint32_t now) {
 void handleWebCommands() {
   WebCommand c;
   while (webPollCommand(c)) {
+    commandDone = c.ticket;
     // Durante a partida nada muda. O servidor já recusa, mas o pedido pode ter
-    // entrado na fila um instante antes de a partida começar.
-    if (state == PLAYING) continue;
+    // entrado na fila um instante antes de a partida começar. Nesse caso,
+    // avisamos a página (commandRefused) para ela não dizer que deu certo.
+    if (state == PLAYING) { commandRefused = c.ticket; continue; }
 
     switch (c.type) {
       case WebCommand::SetName:
@@ -498,13 +503,13 @@ void handleWebCommands() {
         break;
       case WebCommand::Delete:
         if (rankingRemove(ranking, c.id)) {
-          rankingNeedsSave = true;
+          saveRequest(rankingSave);
           lastRank = rankingPositionOf(ranking, lastId);  // a linha do jogador pode ter subido
         }
         break;
       case WebCommand::Reset:
         rankingClear(ranking);
-        rankingNeedsSave = true;
+        saveRequest(rankingSave);
         lastRank = -1;
         break;
     }
@@ -521,6 +526,9 @@ void publishToWeb() {
   s.level = level;
   s.lives = lives;
   s.lastRank = lastRank;
+  s.livesMax = LIVES_MAX;     // a página desenha os corações a partir deste valor
+  s.done = commandDone;
+  s.refused = commandRefused;
   webPublish(s, ranking);
 }
 
@@ -584,9 +592,11 @@ void loop() {
 
     // Gravar na memória demora alguns milissegundos, por isso só quando o
     // ranking muda (fim de partida ou organizador), nunca durante o jogo.
-    if (rankingNeedsSave && state != PLAYING) {
-      rankingNeedsSave = false;
-      if (!storeSave(ranking)) Serial.println("ERRO: nao foi possivel salvar o ranking");
+    // Se falhar, tenta de novo a cada SAVE_RETRY_MS.
+    if (state != PLAYING && saveDue(rankingSave, now)) {
+      bool ok = storeSave(ranking);
+      saveResult(rankingSave, ok, now);
+      if (!ok) Serial.println("ERRO: nao foi possivel salvar o ranking; vou tentar de novo");
     }
   }
 

@@ -39,8 +39,12 @@ async function send(url, fields) {
   const body = new URLSearchParams({ pin: $("pin").value, ...fields });
   try {
     const res = await fetch(url, { method: "POST", body });
-    if (res.ok) say("Feito.");
-    else if (res.status === 403) say("PIN errado.");
+    if (res.ok) {
+      const result = await confirmation(Number(await res.text()));
+      if (result === "ok") say("Feito.");
+      else if (result === "refused") say("Há uma partida em andamento. Espere terminar.");
+      else say("Não deu certo. Tente de novo.");
+    } else if (res.status === 403) say("PIN errado.");
     else if (res.status === 409) say("Há uma partida em andamento. Espere terminar.");
     else if (res.status === 400) say("Preencha o PIN.");
     else say("Não deu certo. Tente de novo.");
@@ -56,10 +60,26 @@ function cell(tr, value) {
   return td;
 }
 
-const source = new EventSource("/events");
-source.onopen = () => say("");
-source.onerror = () => say("Sem conexão com o jogo.");
-source.addEventListener("ranking", (ev) => {
+// "200 OK" só quer dizer que o pedido entrou na fila. Quem confirma é o evento
+// "state": done = último pedido tratado, refused = último recusado.
+let state = null;
+let pending = null;
+
+function checkPending() {
+  if (!pending || !state || state.done < pending.ticket) return;
+  pending.finish(state.refused === pending.ticket ? "refused" : "ok");
+}
+
+function confirmation(ticket) {
+  return new Promise((resolve) => {
+    const finish = (result) => { clearTimeout(timer); pending = null; resolve(result); };
+    const timer = setTimeout(() => finish("timeout"), 3000);
+    pending = { ticket, finish };
+    checkPending();
+  });
+}
+
+function onRanking(ev) {
   const rows = JSON.parse(ev.data).map((e, i) => {
     const tr = document.createElement("tr");
     const name = e.name || "---";
@@ -75,11 +95,25 @@ source.addEventListener("ranking", (ev) => {
     return tr;
   });
   $("rows").replaceChildren(...rows);
-});
+}
+
+// Se o navegador desistir da conexão (CLOSED), criamos outra.
+function connect() {
+  const source = new EventSource("/events");
+  source.onopen = () => say("");
+  source.onerror = () => {
+    say("Sem conexão com o jogo.");
+    if (source.readyState === EventSource.CLOSED) setTimeout(connect, 2000);
+  };
+  source.addEventListener("ranking", onRanking);
+  source.addEventListener("state", (ev) => { state = JSON.parse(ev.data); checkPending(); });
+}
 
 $("reset").onclick = () => {
   if (confirm("Apagar TODO o ranking? Não dá para desfazer.")) send("/admin/reset", {});
 };
+
+connect();
 </script>
 </body>
 </html>

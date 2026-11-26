@@ -1,6 +1,7 @@
 """Testes do script que embute as páginas. Rode: python3 -m unittest discover -s test -p 'test_*.py'"""
 import sys
 import tempfile
+import unicodedata
 import unittest
 from pathlib import Path
 
@@ -40,6 +41,13 @@ class EmbedWeb(unittest.TestCase):
             (root / "web" / "admin.html").unlink()
             with self.assertRaises(FileNotFoundError):
                 generate(root)
+
+    def test_paginas_sem_caracteres_invisiveis(self):
+        web = Path(__file__).resolve().parent.parent / "web"
+        for page in web.glob("*.html"):
+            bad = [hex(ord(c)) for c in page.read_text(encoding="utf-8")
+                   if unicodedata.category(c) in ("Mn", "Cf", "Cc") and c not in "\n\t"]
+            self.assertEqual(bad, [], page.name)
 
 
 if __name__ == "__main__":

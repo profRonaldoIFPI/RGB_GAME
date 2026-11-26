@@ -2,6 +2,7 @@
 #include <string.h>
 #include <unity.h>
 #include "ranking.h"
+#include "pending_save.h"
 
 void setUp() {}
 void tearDown() {}
@@ -108,6 +109,42 @@ void posicao_acompanha_a_linha() {
   TEST_ASSERT_EQUAL(-1, rankingPositionOf(r, 0));
 }
 
+void ids_repetidos_sao_invalidos() {
+  Ranking r{};
+  rankingInsert(r, "A", 200, 0);
+  rankingInsert(r, "B", 100, 0);
+  r.entries[1].id = r.entries[0].id;
+  TEST_ASSERT_FALSE(rankingIsValid(r));
+}
+
+void gravacao_so_quando_pedida() {
+  PendingSave p;
+  TEST_ASSERT_FALSE(saveDue(p, 1000));
+  saveRequest(p);
+  TEST_ASSERT_TRUE(saveDue(p, 1000));
+  saveResult(p, true, 1000);
+  TEST_ASSERT_FALSE(saveDue(p, 60000));
+}
+
+void falha_ao_gravar_tenta_de_novo() {
+  PendingSave p;
+  saveRequest(p);
+  saveResult(p, false, 1000);
+  TEST_ASSERT_FALSE(saveDue(p, 1000 + SAVE_RETRY_MS - 1));
+  TEST_ASSERT_TRUE(saveDue(p, 1000 + SAVE_RETRY_MS));
+  saveResult(p, false, 1000 + SAVE_RETRY_MS);
+  saveRequest(p);                                   // mudança nova: tenta já
+  TEST_ASSERT_TRUE(saveDue(p, 1001 + SAVE_RETRY_MS));
+}
+
+void nova_tentativa_sobrevive_a_virada_do_millis() {
+  PendingSave p;
+  saveRequest(p);
+  saveResult(p, false, 0xFFFFFF00u);
+  TEST_ASSERT_FALSE(saveDue(p, 0xFFFFFF10u));
+  TEST_ASSERT_TRUE(saveDue(p, (uint32_t)(0xFFFFFF00u + SAVE_RETRY_MS)));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(insere_em_ordem);
@@ -119,5 +156,9 @@ int main() {
   RUN_TEST(limpa_apelido);
   RUN_TEST(valida_dados);
   RUN_TEST(posicao_acompanha_a_linha);
+  RUN_TEST(ids_repetidos_sao_invalidos);
+  RUN_TEST(gravacao_so_quando_pedida);
+  RUN_TEST(falha_ao_gravar_tenta_de_novo);
+  RUN_TEST(nova_tentativa_sobrevive_a_virada_do_millis);
   return UNITY_END();
 }

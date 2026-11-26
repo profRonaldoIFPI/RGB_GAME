@@ -55,6 +55,7 @@ bool rankingIsValid(const Ranking& r) {
     sanitizeName(e.name, clean);
     if (strcmp(clean, e.name) != 0) return false;              // caractere proibido
     if (e.id == 0 || e.id >= r.nextId) return false;
+    if (rankingPositionOf(r, e.id) != i) return false;         // id repetido
     if (e.score == 0) return false;
     if (i > 0 && e.score > r.entries[i - 1].score) return false;  // fora de ordem
   }

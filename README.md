@@ -30,11 +30,14 @@ O ESP32 cria a própria rede Wi-Fi. **Não precisa de internet nem de roteador.*
 3. Quem quiser digita um **apelido** (até 10 letras ou números, nunca o nome completo) e clica em **OK**. Depois, é só apertar um botão do jogo.
    - O apelido vale para **uma partida**. Sem apelido, o jogador aparece como `---`.
    - O campo some durante a partida.
+   - Se alguém apertar o botão do jogo no mesmo instante do **OK**, a partida começa sem o apelido. A página avisa, e o nome fica no campo para enviar de novo depois.
 4. Durante o jogo a página mostra pontos, nível, vidas e o recorde. No fim, mostra o Top 10 com a posição do jogador.
 
-**Organizador:** em **http://192.168.4.1/admin**, com o PIN (padrão `1234`), dá para apagar um apelido impróprio ou zerar o ranking (fora de uma partida). O PIN só barra curiosos; não é segurança forte, pois a rede não usa HTTPS.
+**Organizador:** em **http://192.168.4.1/admin**, com o PIN (padrão `1234`), dá para apagar um apelido impróprio ou zerar o ranking (fora de uma partida). O PIN só barra curiosos; não é segurança forte, pois a rede não usa HTTPS. A página só responde **"Feito."** depois que o jogo realmente fez a mudança.
 
-O Top 10 fica gravado na memória do ESP32 e continua lá depois de desligar. Partidas com zero ponto não entram, e no empate quem chegou antes fica acima.
+O Top 10 fica gravado na memória do ESP32 e continua lá depois de desligar. Partidas com zero ponto não entram, e no empate quem chegou antes fica acima. Se a gravação falhar, o ESP32 avisa no Serial Monitor e tenta de novo a cada 5 s, fora das partidas.
+
+Se a conexão cair, a página mostra "Sem conexão" e reconecta sozinha.
 
 > **Antes do evento**, troque a senha e o PIN em [src/config_web.h](src/config_web.h). A senha precisa de 8 caracteres ou mais.
 
@@ -45,13 +48,14 @@ O Top 10 fica gravado na memória do ESP32 e continua lá depois de desligar. Pa
 | [src/main.cpp](src/main.cpp) | **O código do jogo**, com comentários explicando cada parte |
 | [web/index.html](web/index.html), [web/admin.html](web/admin.html) | **Páginas** do placar e do organizador. Edite estes arquivos |
 | [scripts/embed_web.py](scripts/embed_web.py) | Roda antes de cada build e transforma as páginas em `include/web_pages.h` (**gerado**, não edite), que vai dentro do firmware |
+| [scripts/patch_asyncweb.py](scripts/patch_asyncweb.py) | Roda antes de cada build e corrige uma falha da biblioteca do servidor. Por isso as versões no `platformio.ini` são fixas |
 | [src/web.cpp](src/web.cpp), [src/web.h](src/web.h) | Wi-Fi, servidor e envio do placar em tempo real |
 | [src/config_web.h](src/config_web.h) | Nome da rede, senha e PIN |
-| [lib/ranking/](lib/ranking/) | Regras do Top 10 (C++ puro) |
+| [lib/ranking/](lib/ranking/) | Regras do Top 10 e das novas tentativas de gravação (C++ puro) |
 | [src/ranking_store.cpp](src/ranking_store.cpp) | Grava e lê o Top 10 na memória do ESP32 |
 | [test/](test/) | Testes que rodam no computador |
 | [docs/esquema.md](docs/esquema.md) | **Esquema de ligação**, tabela de pinos e lista de materiais |
-| [platformio.ini](platformio.ini) | Configuração do PlatformIO (placa e biblioteca FastLED) |
+| [platformio.ini](platformio.ini) | Configuração do PlatformIO (placa, bibliotecas e scripts de build) |
 
 ## Materiais
 
@@ -89,7 +93,8 @@ Cuidados importantes:
 Abra [src/main.cpp](src/main.cpp) e olhe a seção **1. CONFIGURAÇÃO**:
 - `NUM_LEDS`: conte quantos **pixels** (grupos de LEDs que acendem juntos, normalmente 1 CI a cada 3 LEDs) a sua fita tem e coloque o número.
 - `COLOR_ORDER`: se na hora de testar o vermelho sair de outra cor, troque `BRG` por `RGB`, `GRB`, `GBR`...
-- Dificuldade: `BASE_STEP_MS`, `SPEEDUP`, `LIVES_MAX`.
+- Dificuldade: `BASE_STEP_MS` e `SPEEDUP`.
+- **Número de vidas:** altere `LIVES_MAX` **e** `LIVES_LEDS`, com o mesmo valor. A página do placar segue o `LIVES_MAX` sozinha. Já a fita usa o `LIVES_LEDS`, que define quantos pixels mostram as vidas e onde fica a linha de defesa (mais vidas = pista mais curta). A animação da tela de espera continua destacando 3 pixels.
 
 ### 4. Grave e teste
 1. Conecte o ESP32 por USB (com a fonte de 12 V **desligada**).
@@ -103,7 +108,7 @@ Eles rodam no computador, sem o ESP32:
 
 ```bash
 pio test -e native                                  # regras do ranking (precisa de um compilador C++, como o g++)
-python3 -m unittest discover -s test -p 'test_*.py'  # script que embute as páginas
+python3 -m unittest discover -s test -p 'test_*.py'  # scripts de build
 ```
 
 ### 6. Confira na bancada, antes do evento
@@ -112,6 +117,7 @@ python3 -m unittest discover -s test -p 'test_*.py'  # script que embute as pág
 - [ ] Botões e sons sem engasgos com a página aberta
 - [ ] O ranking continua lá depois de desligar e ligar
 - [ ] Desligar e religar o Wi-Fi do notebook: a página avisa "Sem conexão" e volta sozinha
+- [ ] Repetir isso várias vezes **durante as partidas**: o ESP32 não pode reiniciar
 - [ ] O `/admin` recusa um PIN errado
 - [ ] Depois de 1 hora ligado, o regulador de 5 V não está quente demais
 
@@ -126,12 +132,20 @@ python3 -m unittest discover -s test -p 'test_*.py'  # script que embute as pág
 | A página não abre | O notebook está na rede `RGB-GAME`? Use `http://192.168.4.1`; desligue VPN e, se preciso, os dados móveis ou o cabo de rede |
 | "Sem conexão com o jogo" | O ESP32 reiniciou ou o notebook trocou de rede. Se o ESP32 reinicia sozinho, verifique a alimentação de 5 V |
 | A fita pisca errado só com o Wi-Fi | Confira GND comum, 74HCT125 e alimentação; se continuar, avise o professor (é preciso ajustar o envio de dados do FastLED) |
+| O build para com `patch_asyncweb: código não reconhecido` | A versão da biblioteca do servidor mudou. Volte às versões fixas do `platformio.ini`, apague a pasta `.pio` e compile de novo (veja abaixo) |
 | Mudei o HTML e nada mudou | Compile e grave de novo; as páginas vão dentro do firmware |
 | LEDs aleatórios ou piscando | Falta GND comum, capacitor ou resistor de 330 Ω; fio de dados muito longo, ou conversor de nível inadequado (BSS138/TXS0108E) |
 | Só 1 LED acende (ou só alguns) | `NUM_LEDS` errado |
 | O buzzer faz só "toc" | O buzzer é ativo; troque por um passivo |
 | Botão não responde | Um lado no GPIO e o outro no GND, nada de resistor externo |
 | Não consigo gravar | Cabo USB só de carga; segure o botão **BOOT** durante o upload; desligue o VIN |
+
+## Sobre o remendo na biblioteca do servidor
+
+A biblioteca ESPAsyncWebServer 3.12.1 tem uma falha: se o navegador desconectar no instante em que o jogo está enviando o placar, o ESP32 pode reiniciar. O [scripts/patch_asyncweb.py](scripts/patch_asyncweb.py) corrige isso antes de cada build, alterando a cópia baixada em `.pio/libdeps`. Você não precisa fazer nada.
+
+- Por causa dele, as versões do **ESPAsyncWebServer** e do **AsyncTCP** são fixas no [platformio.ini](platformio.ini). Não atualize sem revisar o script.
+- A falha depende do momento exato da desconexão e não foi reproduzida. Os testes conferem que o remendo é aplicado, **não** que o travamento deixou de existir. Por isso há um teste de bancada para isso.
 
 ## Ideias para evoluir
 
